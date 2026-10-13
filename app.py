@@ -1,33 +1,66 @@
 import streamlit as st
 import pandas as pd
-from sklearn.ensemble import IsolationForest
 
-st.set_page_config(page_title="ACL-Intelligent", page_icon="🕵️", layout="wide")
-st.title("🕵️ ACL-Intelligent | كاشف الاحتيال الضريبي")
+st.set_page_config(page_title="ACL-Intelligent", page_icon="🧾")
+st.title("ACL-Intelligent | كاشف الاحتيال الضريبي")
+st.write("ارفع ملف الفواتير وسيتم كشف الفواتير المشبوهة تلقائيا")
 
-uploaded = st.file_uploader("ارفع ملف الفواتير", type=["xlsx","csv"])
+file = st.file_uploader("اختر ملف Excel", type=["xlsx","csv","xls"])
 
-if uploaded:
-    df = pd.read_csv(uploaded) if uploaded.name.endswith("csv") else pd.read_excel(uploaded)
-    
-    # اختبارات ACL
-    duplicates = df[df.duplicated(subset=['القيمة','اسم المورد'], keep=False)]
-    outliers = df[df['القيمة'] > df['القيمة'].mean()*3]
-    
-    # موديل AI
-    model = IsolationForest(contamination=0.05, random_state=42)
-    df['Risk'] = model.fit_predict(df[['القيمة','الضريبة']])
-    fraud_ai = df[df['Risk']==-1]
+if file:
+    if file.name.endswith(".csv"):
+        df = pd.read_csv(file)
+    else:
+        df = pd.read_excel(file)
 
-    c1,c2,c3 = st.columns(3)
-    c1.metric("الفواتير المكررة", len(duplicates))
-    c2.metric("القيم الشاذة", len(outliers))
-    c3.metric("كشف AI", f"{len(fraud_ai)} فاتورة", "94% دقة")
+    st.success(f"تم تحميل {len(df)} فاتورة")
+    st.dataframe(df.head(20), use_container_width=True)
 
-    st.divider()
-    st.subheader("🚨 المعاملات المحتمل احتيالها")
-    st.dataframe(fraud_ai, use_container_width=True)
-    
-    st.download_button("📥 حمل تقرير الاحتيال", fraud_ai.to_csv(index=False).encode('utf-8-sig'), "تقرير_احتيال.csv")
+    # تحليل ذكي يشتغل مع أي أسماء أعمدة
+    # هنحاول نلاقي عمود المبلغ والضريبة تلقائيا
+    amount_col = None
+    vat_col = None
+    for col in df.columns:
+        c = str(col).lower()
+        if "amount" in c or "مبلغ" in c or "قيمة" in c:
+            if "vat" not in c and "ضريبة" not in c:
+                amount_col = col
+        if "vat" in c or "ضريبة" in c or "tax" in c:
+            vat_col = col
+
+    # لو ملقيناش، ناخد أول عمودين أرقام
+    if amount_col is None:
+        num_cols = df.select_dtypes(include='number').columns.tolist()
+        if len(num_cols) >= 2:
+            amount_col = num_cols[0]
+            vat_col = num_cols[1]
+
+    st.write(f"عمود المبلغ: {amount_col} | عمود الضريبة: {vat_col}")
+
+    def is_fraud(row):
+        try:
+            if amount_col and vat_col:
+                amt = float(row[amount_col])
+                vat = float(row[vat_col])
+                # الضريبة المفروض 14%
+                if amt > 0:
+                    rate = vat / amt
+                    if rate < 0.05 or rate > 0.25: # مش 14%
+                        return "🚨 ضريبة غير صحيحة"
+                    if amt > 300000:
+                        return "🚨 مبلغ ضخم"
+            return "✅ سليم"
+        except:
+            return "✅ سليم"
+
+    df["الحالة"] = df.apply(is_fraud, axis=1)
+    frauds = df[df["الحالة"].str.contains("🚨")]
+
+    st.subheader(f"عدد الفواتير المشبوهة: {len(frauds)} من {len(df)}")
+    if len(frauds) > 0:
+        st.dataframe(frauds, use_container_width=True)
+        st.bar_chart(frauds[amount_col] if amount_col else frauds.iloc[:,0])
+    else:
+        st.info("لم يتم العثور على احتيال")
 else:
-    st.info("جرب ترفع ملف ACL_Project.xlsx اللي عملناه")
+    st.info("في انتظار رفع الملف...")
